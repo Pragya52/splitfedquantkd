@@ -99,4 +99,100 @@ class ClientModel(nn.Module):
         
         # Trainable layers 1-2
         self.layers_1_2 = nn.ModuleList([
-            LLaMADecoder
+            LLaMADecoderLayer(config, layer_idx) 
+            for layer_idx in range(1, 3)  # layers 1, 2
+        ])
+        
+        # Trainable layers 31-32
+        self.layers_31_32 = nn.ModuleList([
+            LLaMADecoderLayer(config, layer_idx) 
+            for layer_idx in range(31, 33)  # layers 31, 32
+        ])
+        
+        # Trainable LLM head
+        self.llm_head = nn.Linear(config.HIDDEN_DIM, config.VOCAB_SIZE, bias=False)
+        
+        # Layer normalization
+        self.input_norm = RMSNorm(config.HIDDEN_DIM, eps=config.RMS_NORM_EPS)
+        self.output_norm = RMSNorm(config.HIDDEN_DIM, eps=config.RMS_NORM_EPS)
+        
+        # Initialize weights
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    
+    def forward_layers_1_2(self, input_ids, attention_mask=None):
+        """Forward pass through client layers 1-2"""
+        # Embedding
+        hidden_states = self.embed_tokens(input_ids)
+        hidden_states = self.input_norm(hidden_states)
+        
+        # Process through layers 1-2
+        for layer in self.layers_1_2:
+            layer_outputs = layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                output_attentions=False,
+                use_cache=False,
+            )
+            hidden_states = layer_outputs[0]
+        
+        return hidden_states
+    
+    def forward_layers_31_32(self, hidden_states, attention_mask=None):
+        """Forward pass through client layers 31-32"""
+        # Process through layers 31-32
+        for layer in self.layers_31_32:
+            layer_outputs = layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                output_attentions=False,
+                use_cache=False,
+            )
+            hidden_states = layer_outputs[0]
+        
+        hidden_states = self.output_norm(hidden_states)
+        return hidden_states
+    
+    def forward_final(self, hidden_states):
+        """Generate final logits"""
+        return self.llm_head(hidden_states)
+    
+    def forward(self, input_ids, attention_mask=None, server_processed_states=None, labels=None):
+        """Complete forward pass for training"""
+        if server_processed_states is None:
+            # Standard forward pass (for standalone evaluation)
+            hidden_states = self.forward_layers_1_2(input_ids, attention_mask)
+            # Skip server processing for standalone mode
+            hidden_states = self.forward_layers_31_32(hidden_states, attention_mask)
+        else:
+            # Federated forward pass
+            hidden_states = self.forward_layers_31_32(server_processed_states, attention_mask)
+        
+        logits = self.forward_final(hidden_states)
+        
+        loss = None
+        if labels is not None:
+            # Shift so that tokens < n predict n
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            
+            # Flatten the tokens
+            loss_fct = nn.CrossEntropyLoss()
+            shift_logits = shift_logits.view(-1, self.config.VOCAB_SIZE)
+            shift_labels = shift_labels.view(-1)
+            
+            # Enable model parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = loss_fct(shift_logits, shift_labels)
+        
+        return {
+            'loss': loss,
+            'logits': logits,
+        }
