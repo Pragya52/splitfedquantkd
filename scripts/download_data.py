@@ -1,72 +1,116 @@
 """
-Script to download and prepare the MedQuad dataset from Kaggle
+Script to prepare the MedQuad dataset from local file
 """
 import os
 import sys
 import pandas as pd
-import requests
-import zipfile
 import json
 from pathlib import Path
 
-def download_medquad_dataset():
+def find_local_dataset():
     """
-    Download MedQuad dataset from Kaggle
+    Find MedQuad dataset in local directories
     """
-    print("Downloading MedQuad dataset from Kaggle...")
+    print("Looking for MedQuad dataset in local directories...")
     
-    # Create data directory
+    # Common locations to check
+    search_paths = [
+        "data/",
+        "./",
+        "../data/",
+        "datasets/",
+        "../datasets/"
+    ]
+    
+    # Common file names for MedQuad dataset
+    possible_filenames = [
+        "MedQuAD.csv",
+        "medquad.csv",
+        "medquad_dataset.csv",
+        "medical_qa.csv",
+        "questions_answers.csv",
+        "qa_dataset.csv"
+    ]
+    
+    # Search for dataset files
+    found_files = []
+    for search_path in search_paths:
+        if os.path.exists(search_path):
+            for filename in possible_filenames:
+                file_path = os.path.join(search_path, filename)
+                if os.path.exists(file_path):
+                    found_files.append(file_path)
+    
+    # Also check for any CSV files in data directory
     data_dir = Path("data")
-    data_dir.mkdir(exist_ok=True)
+    if data_dir.exists():
+        csv_files = list(data_dir.glob("*.csv"))
+        found_files.extend([str(f) for f in csv_files])
     
-    try:
-        import kaggle
-        print("Using Kaggle API to download MedQuad dataset...")
+    # Remove duplicates
+    found_files = list(set(found_files))
+    
+    if found_files:
+        print(f"Found {len(found_files)} potential dataset file(s):")
+        for i, file_path in enumerate(found_files):
+            file_size = os.path.getsize(file_path) / (1024*1024)  # MB
+            print(f"  {i+1}. {file_path} ({file_size:.2f} MB)")
         
-        # Download the actual MedQuad dataset
-        # The MedQuad dataset is available at: kevinarvai/medquad-medical-question-answer-dataset
-        kaggle.api.dataset_download_files(
-            'kevinarvai/medquad-medical-question-answer-dataset', 
-            path=str(data_dir), 
-            unzip=True
-        )
-        
-        # Look for the main CSV file
-        possible_files = [
-            "data/MedQuAD.csv",
-            "data/medquad.csv",
-            "data/questions_answers.csv",
-            "data/medical_qa.csv"
-        ]
-        
-        # Check for any CSV files in the downloaded data
-        csv_files = list(data_dir.glob("**/*.csv"))
-        
-        if csv_files:
-            main_csv = csv_files[0]  # Take the first CSV file found
-            print(f"Found dataset file: {main_csv}")
-            print(f"File size: {os.path.getsize(main_csv) / (1024*1024):.2f} MB")
-            return str(main_csv)
+        # If multiple files found, let user choose
+        if len(found_files) > 1:
+            while True:
+                try:
+                    choice = input(f"\nSelect dataset file (1-{len(found_files)}): ")
+                    choice_idx = int(choice) - 1
+                    if 0 <= choice_idx < len(found_files):
+                        return found_files[choice_idx]
+                    else:
+                        print("Invalid choice. Please try again.")
+                except ValueError:
+                    print("Please enter a valid number.")
         else:
-            print("No CSV files found in downloaded dataset")
-            return None
+            return found_files[0]
+    
+    return None
+
+def get_dataset_path():
+    """
+    Get dataset path from user or find automatically
+    """
+    print("MedQuad Dataset Preparation from Local File")
+    print("=" * 45)
+    
+    # First, try to find automatically
+    auto_found = find_local_dataset()
+    
+    if auto_found:
+        use_auto = input(f"\nUse automatically found file '{auto_found}'? (Y/n): ")
+        if use_auto.lower() != 'n':
+            return auto_found
+    
+    # Manual path input
+    print("\nPlease provide the path to your MedQuad dataset CSV file:")
+    print("Examples:")
+    print("  - data/MedQuAD.csv")
+    print("  - /path/to/your/dataset.csv")
+    print("  - C:\\Users\\username\\Documents\\dataset.csv")
+    
+    while True:
+        file_path = input("\nEnter dataset file path: ").strip().strip('"').strip("'")
         
-    except ImportError:
-        print("Error: Kaggle API not available.")
-        print("Please install Kaggle API:")
-        print("  1. pip install kaggle")
-        print("  2. Download kaggle.json from your Kaggle account")
-        print("  3. Place it in ~/.kaggle/ (Linux/Mac) or C:\\Users\\<username>\\.kaggle\\ (Windows)")
-        print("  4. Set permissions: chmod 600 ~/.kaggle/kaggle.json")
-        return None
+        if not file_path:
+            print("Please enter a valid file path.")
+            continue
         
-    except Exception as e:
-        print(f"Error downloading with Kaggle API: {e}")
-        print("Make sure you have:")
-        print("  1. Kaggle API credentials properly configured")
-        print("  2. Accepted the dataset's terms and conditions on Kaggle website")
-        print("  3. Internet connection")
-        return None
+        if os.path.exists(file_path):
+            file_size = os.path.getsize(file_path) / (1024*1024)  # MB
+            print(f"Found file: {file_path} ({file_size:.2f} MB)")
+            return file_path
+        else:
+            print(f"File not found: {file_path}")
+            retry = input("Try again? (Y/n): ")
+            if retry.lower() == 'n':
+                return None
 
 def load_and_format_medquad(csv_path):
     """
@@ -74,9 +118,29 @@ def load_and_format_medquad(csv_path):
     """
     print("Loading and formatting MedQuad dataset...")
     
-    df = pd.read_csv(csv_path)
-    print(f"Original dataset shape: {df.shape}")
-    print(f"Columns: {list(df.columns)}")
+    try:
+        # Try different encodings
+        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+        df = None
+        
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(csv_path, encoding=encoding)
+                print(f"Successfully loaded with {encoding} encoding")
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if df is None:
+            print("Error: Could not read CSV file with any encoding")
+            return None
+        
+        print(f"Original dataset shape: {df.shape}")
+        print(f"Columns: {list(df.columns)}")
+        
+    except Exception as e:
+        print(f"Error loading CSV file: {e}")
+        return None
     
     # MedQuad dataset typically has columns like 'qtype', 'Question', 'Answer', 'source'
     # We need to standardize to 'question', 'answer', 'category'
@@ -86,13 +150,15 @@ def load_and_format_medquad(csv_path):
     
     # Common column name variations in MedQuad dataset
     for col in df.columns:
-        col_lower = col.lower()
-        if 'question' in col_lower or 'q' == col_lower:
+        col_lower = col.lower().strip()
+        if any(keyword in col_lower for keyword in ['question', 'query', 'q']):
             column_mapping[col] = 'question'
-        elif 'answer' in col_lower or 'a' == col_lower:
+        elif any(keyword in col_lower for keyword in ['answer', 'response', 'a']):
             column_mapping[col] = 'answer'
-        elif 'qtype' in col_lower or 'category' in col_lower or 'source' in col_lower:
+        elif any(keyword in col_lower for keyword in ['qtype', 'category', 'source', 'type', 'class']):
             column_mapping[col] = 'category'
+    
+    print(f"Column mapping: {column_mapping}")
     
     # Rename columns
     df = df.rename(columns=column_mapping)
@@ -101,14 +167,20 @@ def load_and_format_medquad(csv_path):
     if 'question' not in df.columns or 'answer' not in df.columns:
         print("Error: Could not find question and answer columns")
         print("Available columns:", list(df.columns))
+        print("\nPlease make sure your CSV has columns containing questions and answers.")
+        print("Common column names: 'Question', 'Answer', 'query', 'response', etc.")
         return None
     
-    # If no category column, create one based on content or source
+    # If no category column, create one based on content or use existing columns
     if 'category' not in df.columns:
-        if 'source' in df.columns:
-            df['category'] = df['source']
+        # Check if there are other useful columns for categories
+        remaining_cols = [col for col in df.columns if col not in ['question', 'answer']]
+        if remaining_cols:
+            print(f"Using '{remaining_cols[0]}' as category column")
+            df['category'] = df[remaining_cols[0]].astype(str)
         else:
             # Create categories based on question content
+            print("Creating categories based on medical content...")
             df['category'] = df.apply(lambda row: categorize_medical_question(row['question'], row['answer']), axis=1)
     
     # Keep only required columns
@@ -163,28 +235,33 @@ def preprocess_dataset(df):
     df['answer'] = df['answer'].astype(str).str.strip()
     
     # Remove very short entries (likely incomplete)
+    initial_size = len(df)
     df = df[df['question'].str.len() >= 10]
     df = df[df['answer'].str.len() >= 20]
+    print(f"Removed {initial_size - len(df)} entries with very short questions or answers")
     
     # Remove very long entries (might be corrupted or not suitable for QA)
+    initial_size = len(df)
     df = df[df['question'].str.len() <= 1000]
     df = df[df['answer'].str.len() <= 2000]
+    print(f"Removed {initial_size - len(df)} entries with very long text")
     
     # Remove duplicates
     initial_size = len(df)
     df = df.drop_duplicates(subset=['question', 'answer'])
     print(f"Removed {initial_size - len(df)} duplicate entries")
     
-    # Clean text
+    # Clean text - normalize whitespace
     df['question'] = df['question'].str.replace(r'\s+', ' ', regex=True)
     df['answer'] = df['answer'].str.replace(r'\s+', ' ', regex=True)
     
-    # Ensure category is string
-    df['category'] = df['category'].astype(str)
+    # Ensure category is string and clean it
+    df['category'] = df['category'].astype(str).str.strip().str.lower()
     
     print(f"Preprocessed dataset size: {len(df)} samples")
     print(f"Categories distribution:")
-    print(df['category'].value_counts())
+    category_counts = df['category'].value_counts()
+    print(category_counts)
     
     return df
 
@@ -192,7 +269,7 @@ def verify_dataset(df):
     """
     Verify the dataset is properly formatted
     """
-    print("Verifying dataset...")
+    print("\nVerifying dataset...")
     
     try:
         # Check required columns
@@ -220,11 +297,12 @@ def verify_dataset(df):
         print(f"Average answer length: {avg_a_len:.1f} characters")
         print(f"Number of categories: {df['category'].nunique()}")
         
-        # Show sample
+        # Show sample entries
         print("\nSample entries:")
         for i in range(min(3, len(df))):
-            print(f"\nQ: {df.iloc[i]['question'][:100]}...")
-            print(f"A: {df.iloc[i]['answer'][:100]}...")
+            print(f"\n--- Sample {i+1} ---")
+            print(f"Q: {df.iloc[i]['question'][:150]}...")
+            print(f"A: {df.iloc[i]['answer'][:150]}...")
             print(f"Category: {df.iloc[i]['category']}")
         
         return True
@@ -235,29 +313,25 @@ def verify_dataset(df):
 
 def main():
     """
-    Main function to download and prepare the dataset
+    Main function to prepare the dataset from local file
     """
-    print("MedQuad Dataset Preparation from Kaggle")
-    print("=" * 45)
+    # Create data directory if it doesn't exist
+    data_dir = Path("data")
+    data_dir.mkdir(exist_ok=True)
     
-    # Check if dataset already exists
+    # Check if preprocessed dataset already exists
     preprocessed_path = "data/medquad_dataset_preprocessed.csv"
     if os.path.exists(preprocessed_path):
-        response = input(f"Dataset already exists at {preprocessed_path}. Re-download? (y/N): ")
+        response = input(f"Preprocessed dataset already exists at {preprocessed_path}. Re-process? (y/N): ")
         if response.lower() != 'y':
-            print("Using existing dataset.")
+            print("Using existing preprocessed dataset.")
             return preprocessed_path
     
-    # Download dataset
-    csv_path = download_medquad_dataset()
+    # Get dataset path
+    csv_path = get_dataset_path()
     
-    if not csv_path or not os.path.exists(csv_path):
-        print("Error: Could not download dataset from Kaggle")
-        print("\nTroubleshooting steps:")
-        print("1. Make sure you have Kaggle API installed: pip install kaggle")
-        print("2. Configure Kaggle API credentials (kaggle.json)")
-        print("3. Accept dataset terms on Kaggle website")
-        print("4. Check internet connection")
+    if not csv_path:
+        print("Error: No dataset file provided")
         sys.exit(1)
     
     # Load and format dataset
